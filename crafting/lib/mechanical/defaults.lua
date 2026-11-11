@@ -23,6 +23,10 @@ return {
     craftPollSeconds = 0.5,
     deliveryTimeout = 300,
     deliveryPollSeconds = 2,
+    -- What has not started arriving this long is ordered again, at most
+    -- maxReorders times (Create drops a whole order silently).
+    reorderSeconds = 60,
+    maxReorders = 2,
     -- Stacks one batch of ingredients may take (order and chest room).
     batchStacks = 45,
     idleShipSeconds = 30,

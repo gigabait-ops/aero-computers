@@ -19,7 +19,7 @@ local amount, failure = Util.amount, Util.failure
 
 local Station = {}
 Station.__index = Station
-Station.RELEASE = "2026-11-10.1"
+Station.RELEASE = "2026-11-11.1"
 
 Station.MACHINES = {
     mechanical = "mechanical.crafter",
@@ -233,11 +233,34 @@ function Station:order(need, maxCounts)
     return true
 end
 
--- Waits until the chest holds `want` (item -> count).
-function Station:waitDelivery(want)
+-- Waits until the chest holds `want` (item -> count). `reorder` (the order
+-- just placed: need, maxCounts, and the chest before it) orders again what
+-- never started arriving: Create drops a whole order when a packager is too
+-- busy and the ticker still says yes (zinc for the crafter, 0 of 18, while
+-- the netherite chain kept the packagers busy, 2026-11-11).
+function Station:waitDelivery(want, reorder)
     local deadline = self.now() + (self.config.deliveryTimeout or 300)
+    local every = self.config.reorderSeconds or 60
+    local nextReorder, reorders = self.now() + every, 0
     while true do
         local counts = self:chestCounts()
+        if reorder and self.now() >= nextReorder and reorders < (self.config.maxReorders or 2) then
+            nextReorder = self.now() + every
+            local again = {}
+            for name, count in pairs(reorder.need) do
+                if count > 0 and (counts[name] or 0) <= (reorder.before[name] or 0) then again[name] = count end
+            end
+            if next(again) then
+                reorders = reorders + 1
+                local list = {}
+                for name, count in pairs(again) do list[#list + 1] = name .. " x" .. count end
+                table.sort(list)
+                self:log("station.reorder", {missing = table.concat(list, ", "), reorder = reorders})
+                local ok, orderError = self:order(again, reorder.maxCounts)
+                if not ok then return nil, orderError end
+                deadline = self.now() + (self.config.deliveryTimeout or 300)
+            end
+        end
         local missing
         for name, count in pairs(want) do
             if (counts[name] or 0) < count then missing = {name = name, need = count, have = counts[name] or 0}; break end
@@ -473,7 +496,8 @@ function Station:runJob(job)
             self:show("ordering", {crafts = batch, target = recipe.target})
             local ordered, orderError = self:order(need, maxCounts)
             if not ordered then return nil, orderError end
-            local arrived, deliveryError = self:waitDelivery(take)
+            local arrived, deliveryError = self:waitDelivery(take,
+                {need = need, maxCounts = maxCounts, before = inChest})
             if not arrived then return nil, deliveryError end
             local made, craftError = self.machine.batch(self, recipe, batch)
             active.askedAt = nil
