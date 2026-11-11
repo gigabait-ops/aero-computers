@@ -1,0 +1,73 @@
+-- Machine station settings. Every key not set here comes from
+-- mechanical/defaults.lua; put only what you change here.
+--
+-- A station is a worker of the craft controller for one machine kind. It
+-- finds on its own wired network: its machines (by block name), the Stock
+-- Ticker, and, with one marker delivery to its address, the chest that
+-- deliveries land in and the packager on it (kept in data/devices.lua).
+-- It also gives its frogport the address below. This file names only what
+-- it cannot find.
+--
+-- Required for every kind:
+--   kind    - "mechanical" | "saw" | "slicer" | "basin" | "compact".
+--             Left unset, the station stops at boot with
+--             "settings.lua: kind must be mechanical, saw, slicer, basin or compact".
+--   address - the Create package address of this station (its frogport).
+--             Each station needs its own, unique address.
+--
+-- Optional for every kind:
+--   ticker   = "Create_StockTicker_0", -- only when the network has several
+--   frogport = "Create_Frogport_0",    -- only when the network has several
+--   shipAddress = "Storage",           -- where finished items are shipped
+--   marker = "minecraft:cobblestone",  -- the item the boot delivery uses to
+--                                      -- find the chest and packager
+--   batchStacks = 45,                  -- stacks one batch may order into the chest
+--
+-- Uncomment ONE of the examples below and change the address.
+return {
+    -- Mechanical crafter: Create mechanical crafting on a grid of crafters.
+    -- The crafters' positions cannot be read from the network, so `grid`
+    -- lists their peripheral ids (create:mechanical_crafter_<id>, or a full
+    -- peripheral name as a string), top row first, left to right as seen
+    -- from the crafters' face. `trigger` is the side of this computer that
+    -- touches a crafter (one redstone pulse starts the craft); add
+    -- peripheral = "<redstone relay name>" to pulse through a relay instead.
+    -- kind = "mechanical",
+    -- address = "Mechanical Crafter",
+    -- grid = {
+    --     {20, 21, 22, 23, 24},
+    --     {15, 16, 17, 18, 19},
+    --     {10, 11, 12, 13, 14},
+    --     {5, 6, 7, 8, 9},
+    --     {0, 1, 2, 3, 4},
+    -- },
+    -- trigger = {side = "right"},
+
+    -- Saws: stonecutting and Create cutting. Every create:saw on the network
+    -- is used (or list them: saws = {"create:saw_0", ...}); the saws drop
+    -- their output where the chest (e.g. with a magnet upgrade) picks it up.
+    -- kind = "saw",
+    -- address = "Saw Station",
+
+    -- Slicers: Slice & Dice cutting. Each slicer cuts what lies on the depot
+    -- under it and gets the recipe's tool. `tools` (optional) pins the exact
+    -- tool per kind; without it any tool of that kind is used.
+    -- kind = "slicer",
+    -- address = "Slicer Station",
+    -- tools = {axe = "minecraft:iron_axe", knife = "farmersdelight:iron_knife", shears = "minecraft:shears"},
+
+    -- Basins: Create mixing and compacting (a mixer basin and a press basin,
+    -- heated as the recipes need). Which basin is which is learned from the
+    -- first batch (data/basins.lua).
+    -- kind = "basin",
+    -- address = "Basin Station",
+
+    -- Compacting chest: a Sophisticated Storage chest with the compacting
+    -- upgrade. The controller sends it every target made of one item in a
+    -- 2x2, 3x3 or ring crafting recipe. The marker must be an item the chest
+    -- does not compact (cobblestone would turn into furnaces).
+    -- kind = "compact",
+    -- address = "Compacting Chest",
+    -- marker = "minecraft:dirt",
+    -- batchStacks = 72, -- how many stacks one batch may take (stack upgrades)
+}

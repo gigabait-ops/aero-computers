@@ -1,0 +1,38 @@
+-- Screen texts (the master's and the glasses' Recent lists); also the
+-- fallback locale. See fc/core/notice.lua.
+return {
+    -- the master's news (fc/ui/view.lua)
+    ["drone.cut"] = "motors cut: the ship tipped over",
+    ["drone.too_steep"] = "too steep: landing",
+    ["props.stalled"] = "props stopped: lift held lower",
+    ["lift.full"] = "full lift again",
+    ["lift.short"] = "short of lift: max {speed} b/s",
+    ["power.lost"] = "props have no power",
+    ["power.back"] = "power back",
+    ["refused"] = "{reason:reason}",
+    ["arrived"] = "arrived",
+    ["arrived.at"] = "arrived at {point:name}",
+    ["docked"] = "docked at {point:name}",
+    ["landed"] = "landed",
+    ["takeoff"] = "taking off",
+    ["goto"] = "flying {blocks} blocks",
+    ["land"] = "landing",
+    ["resumed"] = "restarted in the air: holding here",
+    ["motors.on"] = "motors on",
+    ["motors.off"] = "motors off",
+    ["legs.down"] = "legs down",
+    ["legs.up"] = "legs up",
+    ["engine.on"] = "engine on",
+    ["engine.off"] = "engine off",
+    ["ion.low"] = "ion engine low on energy",
+    ["point.deleted"] = "point {point:name} deleted",
+    ["route.start"] = "route {route:name}",
+    ["route.done"] = "route {route:name} done",
+    ["route.stopped"] = "route {route:name} stopped",
+    ["passed"] = "over {point:name}",
+    -- the glasses' own (pocket/pda/chat.lua)
+    ["link.lost"] = "no answer from the drone",
+    ["link.back"] = "link back: {activity:state}",
+    ["player.near"] = "{player:name} is near",
+    ["player.left"] = "{player:name} left",
+}
