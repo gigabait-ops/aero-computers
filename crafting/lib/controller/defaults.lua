@@ -3,6 +3,8 @@ return {
     -- Recipe rules for the workers (blockedRecipes, avoidCandidates); edit it
     -- on PC48, no /reload needed.
     recipePolicyFile = "recipe_policy.lua",
+    -- Who makes what first, and recipes no one uses (controller.recipe_policy).
+    makersFile = "makers.lua",
     requestHostname = "craft-controller",
     workerHostname = "autocrafter-controller",
     tickSeconds = 1,

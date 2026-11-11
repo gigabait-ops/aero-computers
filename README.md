@@ -25,7 +25,7 @@ role no longer uses are removed.
 
 | Role | Runs on | What it does | Set up in |
 | --- | --- | --- | --- |
-| `crafting-controller` | computer with a wired modem | Takes craft orders, plans them (sub-crafts included), hands jobs to turtles and stations, paces warehouse orders | `settings.lua`, `recipe_policy.lua` |
+| `crafting-controller` | computer with a wired modem | Takes craft orders, plans them (sub-crafts included), hands jobs to turtles and stations, paces warehouse orders | `settings.lua`, `recipe_policy.lua`, `makers.lua` (who makes what first) |
 | `crafting-turtle` | crafting turtle | Pulls the ingredients from the warehouse and crafts the controller's jobs | nothing: it finds its frogport, barrel and packager |
 | `crafting-station` | computer at a machine | Mechanical crafter, saw, slicer, basin or compactor station | `settings.lua` (`kind`, `address`, ...) |
 | `crafting-requester` | computer with a monitor | Warehouse rules: keeps stock by ordering crafts, exports and overflow | `config.lua`, `requests/*.lua` |

@@ -84,6 +84,7 @@ return {
             {"crafting/lib/controller/store.lua", "/controller/store.lua"},
             {"crafting/lib/controller/supplier.lua", "/controller/supplier.lua"},
             {"crafting/lib/fleet_util.lua", "/fleet_util.lua"},
+            {"crafting/controller/makers.lua", "/makers.lua", keep = true},
             {"crafting/lib/mechanical/compacting.lua", "/mechanical/compacting.lua"},
             {"crafting/controller/recipe_policy.lua", "/recipe_policy.lua", keep = true},
             {"crafting/controller/settings.lua", "/settings.lua", keep = true},

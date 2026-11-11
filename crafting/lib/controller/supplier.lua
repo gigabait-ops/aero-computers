@@ -95,17 +95,19 @@ function Supplier:summary()
 end
 
 -- Who can make an item for a requester of kind `exclude` (never itself: it
--- would wait on itself), in the order to try them: "turtle", a station
--- kind, "machine". A "turtle" has a crafting-table recipe.
+-- would wait on itself), in the order to try them (controller.job_kind,
+-- makers.lua): "turtle", a station kind, "machine@<address>". A "turtle"
+-- has a crafting-table recipe.
 function Supplier:makers(name, exclude)
     local kinds = self.controller:kinds()
     local ok, list = pcall(kinds.makers, kinds, name)
     if not ok or type(list) ~= "table" then return {} end
     local out = {}
-    for _, kind in ipairs(list) do
+    for _, maker in ipairs(list) do
+        local kind = maker:match("^machine@") and JobKind.MACHINE or maker
         local usable = kind ~= exclude
         if usable and kind == JobKind.TURTLE then usable = kinds:crafted(name) end
-        if usable then out[#out + 1] = kind end
+        if usable then out[#out + 1] = maker end
     end
     return out
 end
@@ -159,6 +161,17 @@ function Supplier:machineRecipes(name)
     return list
 end
 
+-- The crafting-table recipes for `name`, those blocked in makers.lua left out.
+function Supplier:craftingRecipes(api, name)
+    local kinds = self.controller:kinds()
+    local ok, page = pcall(api.find, {result = name, workbench = "crafting_table", limit = 50})
+    local out = {}
+    for _, record in ipairs(ok and type(page) == "table" and type(page.items) == "table" and page.items or {}) do
+        if not (type(record) == "table" and record.id and kinds:blocked(record.id)) then out[#out + 1] = record end
+    end
+    return out
+end
+
 -- Do the turtles make `name` only from what this supply chain is making
 -- (coal from coal blocks, for coal blocks for diamonds, 2026-11-07)? Then
 -- a machine makes it instead.
@@ -166,8 +179,7 @@ function Supplier:turtleGoesRound(name, chain)
     if not next(chain or {}) then return false end
     local api = self.controller:kinds():recipes()
     if not api or type(api.find) ~= "function" then return false end
-    local ok, page = pcall(api.find, {result = name, workbench = "crafting_table", limit = 50})
-    local records = ok and type(page) == "table" and page.items or {}
+    local records = self:craftingRecipes(api, name)
     if #records == 0 then return false end
     for _, record in ipairs(records) do
         local round = false
@@ -182,20 +194,24 @@ function Supplier:turtleGoesRound(name, chain)
     return true
 end
 
--- The input slots (item ids each) of every recipe a station of one of
--- `types` has for `name`, by its first or a later guaranteed output.
+-- The input slots (item ids each, and `quantity` per craft) of every
+-- recipe a station of one of `types` has for `name`, by its first or a
+-- later guaranteed output; `yield` is how many of `name` one craft gives.
 local function stationRecipes(kinds, api, name, types)
     local ids = Producers.ids(kinds:rows(api, name), types, {byOutput = true})
     local records = Producers.details(api, ids) or {}
     local recipes = {}
     for _, id in ipairs(ids) do
         local record = records[id]
-        local slots = {}
-        for _, input in ipairs(type(record) == "table" and type(record.machine) == "table"
-                and record.machine.inputs or {}) do
+        local machine = type(record) == "table" and type(record.machine) == "table" and record.machine or {}
+        local slots = {yield = 1}
+        for _, output in ipairs(machine.outputs or {}) do
+            if output.id == name then slots.yield = math.max(1, amount(output.quantity)); break end
+        end
+        for _, input in ipairs(machine.inputs or {}) do
             -- items only: the station keeps its fluids itself
             if input.kind == nil or input.kind == "item" then
-                local items = {}
+                local items = {quantity = math.max(1, amount(input.quantity))}
                 for _, alternative in ipairs(input.alternatives or {}) do items[#items + 1] = alternative.id end
                 slots[#slots + 1] = items
             end
@@ -275,11 +291,14 @@ function Supplier:plan(name, count, ctx, depth, deliverTo)
     if ctx.chain[name] then return false, {name = name, count = count} end
     -- Every maker in turn, the first that can have what it needs (owner
     -- 2026-11-08: one maker a time said MISSING while another could).
+    -- In makers.lua's order (owner 2026-11-11): netherrack by the haunting
+    -- fan, not the saw cutting round a decor family or the slow basin.
     local lacking
     for _, maker in ipairs(self:makers(name, ctx.exclude)) do
         local made, why
-        if maker == JobKind.MACHINE then
-            made, why = self:planMachine(name, count, ctx, depth)
+        local address = maker:match("^machine@(.+)$")
+        if address or maker == JobKind.MACHINE then
+            made, why = self:planMachine(name, count, ctx, depth, address)
         else
             made, why = self:planJob(name, count, maker, ctx, depth, deliverTo)
         end
@@ -308,11 +327,15 @@ function Supplier:planJob(name, count, maker, ctx, depth, deliverTo)
 end
 
 -- A machine makes `name`: its inputs from stock, or made first.
-function Supplier:planMachine(name, count, ctx, depth)
+function Supplier:planMachine(name, count, ctx, depth, address)
     if depth > self.maxDepth or ctx.visiting[name] then return false, {name = name, count = count} end
     ctx.visiting[name] = true
     local lacking
+    local recipes = {}
     for _, recipe in ipairs(self:machineRecipes(name)) do
+        if not address or recipe.address == address then recipes[#recipes + 1] = recipe end
+    end
+    for _, recipe in ipairs(recipes) do
         -- A chance output gets a quarter more input, for bad luck.
         local crafts = math.ceil(count / recipe.yield * (recipe.chance and 1.25 or 1))
         local mark, taken = #ctx.steps, copy(ctx.taken)
@@ -401,9 +424,12 @@ function Supplier:stationCan(name, count, kind, ctx, depth)
                 need = math.ceil(count / math.max(1, source.perCraft)) * source.cells}}
         end
     else
+        -- The whole job's worth, not one: one block of a netherrack decor
+        -- in stock sent all netherrack to the saw, which then cut round the
+        -- decor family for it and failed, every time (netherite, 2026-11-11).
         for _, slots in ipairs(stationRecipes(kinds, api, name, JobKind.stationTypes(kind) or {})) do
-            local recipe = {}
-            for _, items in ipairs(slots) do recipe[#recipe + 1] = {items = items, need = 1} end
+            local recipe, crafts = {}, math.ceil(count / slots.yield)
+            for _, items in ipairs(slots) do recipe[#recipe + 1] = {items = items, need = crafts * items.quantity} end
             recipes[#recipes + 1] = recipe
         end
     end
@@ -443,9 +469,8 @@ function Supplier:turtleCan(name, count, ctx, depth)
     if depth >= self.maxDepth then return true end
     local api = self.controller:kinds():recipes()
     if not api or type(api.find) ~= "function" then return true end
-    local ok, page = pcall(api.find, {result = name, workbench = "crafting_table", limit = 50})
-    local records = ok and type(page) == "table" and page.items or nil
-    if not records or #records == 0 then return true end
+    local records = self:craftingRecipes(api, name)
+    if #records == 0 then return true end
     local chain = {[name] = true}
     for item in pairs(ctx.chain or {}) do chain[item] = true end
     local lacking

@@ -59,6 +59,8 @@ function JobKind.new(options)
         dyeCache = {},
         -- online(kind): a station of that kind polls PC48 now.
         online = options.online,
+        -- policy(): PC48's makers.lua (controller.recipe_policy), or nil
+        policyOf = options.policy,
         cache = {},
         compactCache = {},
         generation = nil,
@@ -92,12 +94,40 @@ end
 -- What makes the target (Producers.rows), kept per recipe generation; an
 -- error is not kept, so the next ask tries again.
 function JobKind:rows(api, target)
+    local policy = self:policy()
     self.rowsCache = self.rowsCache or {}
     if self.rowsCache[target] then return self.rowsCache[target] end
     local rows, err = Producers.rows(api, target)
     if not rows then return nil, err end
+    -- a recipe blocked in makers.lua makes nothing
+    if next(policy.blocked) then
+        local kept = {}
+        for _, row in ipairs(rows) do
+            if not policy.blocked[row.recipeId] then kept[#kept + 1] = row end
+        end
+        rows = kept
+    end
     self.rowsCache[target] = rows
     return rows
+end
+
+local NO_POLICY = {items = {}, blocked = {}, blockedList = {}}
+
+-- PC48's makers.lua (controller.recipe_policy); a new or changed file
+-- forgets what was decided under the old one.
+function JobKind:policy()
+    local policy = self.policyOf and self.policyOf() or nil
+    policy = type(policy) == "table" and policy or NO_POLICY
+    if policy ~= self.policySeen then
+        self.policySeen = policy
+        self.cache, self.compactCache, self.makersCache, self.rowsCache, self.availableCache = {}, {}, {}, {}, {}
+    end
+    return policy
+end
+
+-- Is the recipe blocked in makers.lua?
+function JobKind:blocked(recipeId)
+    return self:policy().blocked[recipeId] == true
 end
 
 -- The first entry of `list` whose recipe types make the target, or nil.
@@ -132,9 +162,12 @@ function JobKind:classify(target)
     local okMeta, meta = pcall(api.meta or error)
     local generation = okMeta and type(meta) == "table" and meta.generation or nil
     if generation ~= nil and generation ~= self.generation then
-        self.cache, self.compactCache, self.makersCache, self.dyeCache, self.rowsCache, self.generation =
-            {}, {}, {}, {}, {}, generation
+        self.cache, self.compactCache, self.makersCache, self.dyeCache, self.rowsCache, self.availableCache,
+            self.generation = {}, {}, {}, {}, {}, {}, generation
     end
+    -- What makers.lua puts first for the target, when it can make it.
+    local preferred = self:makersFor(target)[1]
+    if preferred then return (preferred:match("^machine@") and JobKind.MACHINE) or preferred end
     -- A dyeing fan first (owner 2026-11-08): one item into one, no dye spent.
     if #self:dyeFanRecipes(target) > 0 then return JobKind.MACHINE end
     if self:compacts(api, target) then return JobKind.COMPACT end
@@ -151,33 +184,95 @@ function JobKind:classify(target)
     return self.cache[target]
 end
 
--- Every kind that can make the target, the one `classify` picks first, then
--- the turtles (a crafting-table recipe), the compacting chest, the stations
--- and the machines in their order (PC48's supplier tries them in turn,
--- owner 2026-11-08).
+-- What can make the target: {kinds = set of kinds, machines = addresses
+-- in the order PC48 tries them (dyeing fans, then settings `machines`)},
+-- kept per recipe generation; nil on a lookup error.
+function JobKind:available(target)
+    local api = self:recipes()
+    if not usable(api, target) then return nil end
+    self.availableCache = self.availableCache or {}
+    if self.availableCache[target] then return self.availableCache[target] end
+    local rows = self:rows(api, target)
+    if not rows then return nil end
+    local kinds, machines, seen = {}, {}, {}
+    if Producers.crafting(rows) then kinds[JobKind.TURTLE] = true end
+    if self:compacts(api, target) then kinds[JobKind.COMPACT] = true end
+    for _, entry in ipairs(STATIONS) do
+        if first(rows, {entry}) then kinds[entry.kind] = true end
+    end
+    local function machine(address)
+        if not seen[address] then seen[address], machines[#machines + 1] = true, address end
+    end
+    for _, fan in ipairs(self:dyeFanRecipes(target)) do machine(fan.address) end
+    for _, entry in ipairs(self.machines) do
+        if first(rows, {entry}) then machine(entry.address) end
+    end
+    if #machines > 0 then kinds[JobKind.MACHINE] = true end
+    local out = {kinds = kinds, machines = machines}
+    self.availableCache[target] = out
+    return out
+end
+
+-- makers.lua names as makers of the target: a kind, or "machine@<address>"
+-- for one machine; "machine" stands for every machine in order. Only those
+-- that can make it.
+local function expand(names, available, add)
+    for _, name in ipairs(names) do
+        if name == JobKind.MACHINE then
+            for _, address in ipairs(available.machines) do add("machine@" .. address) end
+        elseif available.kinds[name] and name ~= JobKind.MACHINE then
+            add(name)
+        else
+            for _, address in ipairs(available.machines) do
+                if address == name then add("machine@" .. address) end
+            end
+        end
+    end
+end
+
+-- What makers.lua puts first for the target, of those that can make it.
+function JobKind:makersFor(target)
+    local names = self:policy().items[target]
+    if not names then return {} end
+    local available = self:available(target)
+    if not available then return {} end
+    local list, seen = {}, {}
+    expand(names, available, function(entry)
+        if not seen[entry] then seen[entry], list[#list + 1] = true, entry end
+    end)
+    return list
+end
+
+-- Every maker of the target in the order to try them (PC48's supplier
+-- tries them in turn, owner 2026-11-08): what makers.lua puts first for
+-- it, then its `order` (when set) or the one `classify` picks, the
+-- turtles (a crafting-table recipe), the compacting chest, the stations
+-- and the machines in their order. A machine is "machine@<address>".
 function JobKind:makers(target)
     local first_ = self:classify(target)
     self.makersCache = self.makersCache or {}
     local cached = self.makersCache[target]
-    if cached and cached[1] == first_ then return cached end
+    if cached and cached[1] == first_ then return cached.list end
+    local available = self:available(target)
     local list, seen = {}, {}
-    local function add(kind)
-        if kind and not seen[kind] then seen[kind], list[#list + 1] = true, kind end
+    local function add(entry)
+        if entry and not seen[entry] then seen[entry], list[#list + 1] = true, entry end
     end
-    add(first_)
-    local api = self:recipes()
-    if not usable(api, target) then return list end
-    -- a lookup error is not kept: the next ask tries again
-    local rows = self:rows(api, target)
-    if not rows then return list end
-    if Producers.crafting(rows) then add(JobKind.TURTLE) end
-    if self:compacts(api, target) then add(JobKind.COMPACT) end
-    for _, entry in ipairs(STATIONS) do
-        if first(rows, {entry}) then add(entry.kind) end
+    if not available then
+        -- a lookup error is not kept: the next ask tries again
+        add(first_)
+        return list
     end
-    if first(rows, self.machines) then add(JobKind.MACHINE) end
+    for _, entry in ipairs(self:makersFor(target)) do add(entry) end
+    local default = {}
+    for _, name in ipairs(self:policy().order or {}) do default[#default + 1] = name end
+    for _, name in ipairs({first_, JobKind.TURTLE, JobKind.COMPACT, JobKind.MECHANICAL, JobKind.SAW,
+            JobKind.SLICER, JobKind.BASIN, JobKind.MACHINE}) do
+        default[#default + 1] = name
+    end
+    expand(default, available, add)
     -- kept per recipe generation, while the first choice stays the same
-    self.makersCache[target] = list
+    self.makersCache[target] = {first_, list = list}
     return list
 end
 

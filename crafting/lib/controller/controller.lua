@@ -124,6 +124,7 @@ function Controller.new(options)
         }),
         store = store,
         recipePolicy = options.recipePolicy,
+        makerPolicy = options.makerPolicy,
         recipesApi = options.recipes,
         term = options.term or term,
         logger = options.logger,
@@ -379,8 +380,44 @@ end
 function Controller:kinds()
     self.jobKind = self.jobKind or JobKind.new({recipes = self.recipesApi, machines = self.config.machines,
         dyeFans = self.config.dyeFans,
-        online = function(kind) return self:kindOnline(kind) end})
+        online = function(kind) return self:kindOnline(kind) end,
+        policy = function() return self:currentMakerPolicy() end})
     return self.jobKind
+end
+
+-- Who makes what first, from PC48's /makers.lua (controller.recipe_policy),
+-- re-read when the file changes; nil without one.
+function Controller:currentMakerPolicy()
+    if not self.makerPolicy then
+        self.makerPolicy = RecipePolicy.new({
+            path = self.config.makersFile or "makers.lua",
+            fs = self.fs,
+            log = function(event, fields) self:log(event, fields) end,
+            normalize = RecipePolicy.normalizeMakers,
+            summary = RecipePolicy.summarizeMakers,
+            event = "makers",
+        })
+    end
+    return self.makerPolicy:get()
+end
+
+-- The workers' recipe rules: recipe_policy.lua with makers.lua's blocked
+-- recipes added.
+function Controller:workerRecipePolicy()
+    local policy, makers = self:currentRecipePolicy(), self:currentMakerPolicy()
+    if not makers or #makers.blockedList == 0 then return policy end
+    if self.mergedPolicy and self.mergedPolicy.from == policy and self.mergedPolicy.makers == makers then
+        return self.mergedPolicy.value
+    end
+    local blocked, seen = {}, {}
+    for _, list in ipairs({policy and policy.blockedRecipes or {}, makers.blockedList}) do
+        for _, id in ipairs(list) do
+            if not seen[id] then seen[id], blocked[#blocked + 1] = true, id end
+        end
+    end
+    local value = {blockedRecipes = blocked, avoidCandidates = policy and policy.avoidCandidates or {}}
+    self.mergedPolicy = {from = policy, makers = makers, value = value}
+    return value
 end
 
 -- Recipe rules from PC48's /recipe_policy.lua, re-read when the file changes.
@@ -398,7 +435,7 @@ end
 function Controller:sendJob(job, assignment)
     return self:send(
         assignment.worker,
-        self.protocol:workerJob(job, assignment, self:currentRecipePolicy()),
+        self.protocol:workerJob(job, assignment, self:workerRecipePolicy()),
         self.protocol.workerProtocol
     )
 end
