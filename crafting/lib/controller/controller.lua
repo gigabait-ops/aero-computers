@@ -712,6 +712,8 @@ function Controller:watchWorkers(now)
         local was = self.workerOnline[key]
         if was ~= nil and was ~= online then
             Notice.emit(online and "worker.online" or "worker.offline", {id = worker.id}, self.rednet)
+            self:log(online and "worker.online" or "worker.offline", {worker = worker.id, state = worker.state,
+                busy = worker.assignment ~= nil, silent = math.floor(now - (tonumber(worker.lastSeen) or 0))})
         end
         if online or was ~= nil then self.workerOnline[key] = online end
     end
@@ -915,10 +917,31 @@ function Controller:start()
     if tickerError then self:log("supplier.ticker_unavailable", {error = tickerError.message}) end
     Notice.emit("system.started", {name = "PC48", version = RELEASE}, self.rednet)
     self:render()
+    -- Rednet messages, kept by their own coroutine: while the network loop
+    -- waits in a peripheral call (the ticker, Recipe Atlas) CC throws away
+    -- every other event it gets, and the workers' polls with them - idle
+    -- turtles and stations "lost" and "back" all day while the netherite
+    -- chain kept the ticker busy (2026-11-13).
+    local inbox = {}
+    local function receiveLoop()
+        while true do
+            local _, sender, message, protocol = os.pullEvent("rednet_message")
+            inbox[#inbox + 1] = {sender, message, protocol}
+        end
+    end
+    local function drain()
+        while #inbox > 0 do
+            local entry = table.remove(inbox, 1)
+            local sender, message, protocol = entry[1], entry[2], entry[3]
+            if protocol == self.protocol.requestProtocol then self:handleRequest(sender, message)
+            elseif protocol == self.protocol.workerProtocol then self:handleWorker(sender, message) end
+        end
+    end
     local function networkLoop()
         local timer = os.startTimer(self.config.tickSeconds)
         local tickAt = self.now()
         local function tick()
+            drain()
             self:sendOrderGrants(self.orderGate:evaluate(self.now()))
             local tickOk, tickError = pcall(self.supplier.tick, self.supplier)
             if not tickOk and tostring(tickError) ~= self.lastTickError then
@@ -934,8 +957,7 @@ function Controller:start()
             local raw = table.pack(os.pullEvent())
             local event, a, b, c = raw[1], raw[2], raw[3], raw[4]
             if event == "rednet_message" then
-                if c == self.protocol.requestProtocol then self:handleRequest(a, b)
-                elseif c == self.protocol.workerProtocol then self:handleWorker(a, b) end
+                drain()
             elseif event == "timer" and a == timer then
                 tick()
             else
@@ -956,7 +978,7 @@ function Controller:start()
     local function renderLoop()
         while true do self:render(); os.sleep(0.25) end
     end
-    parallel.waitForAny(networkLoop, renderLoop)
+    parallel.waitForAny(receiveLoop, networkLoop, renderLoop)
 end
 
 return Controller
